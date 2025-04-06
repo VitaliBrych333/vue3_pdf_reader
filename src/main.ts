@@ -31,6 +31,21 @@ const app = createApp(App);
 //   createApp(App)
 // );
 
+import { GlobalWorkerOptions } from 'pdfjs-dist';
+// import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs'
+
+// GlobalWorkerOptions.workerSrc = new URL(
+//   "pdfjs-dist/build/pdf.worker.min.mjs",
+//   import.meta.url
+// ).toString();
+
+// GlobalWorkerOptions.workerSrc = URL.createObjectURL(new Blob([pdfjsWorker]))
+
+// import * as pdfjsLib from "pdfjs-dist";
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+
+GlobalWorkerOptions.workerSrc = pdfWorker;
+
 app.config.errorHandler = (err, vm, info) => {
   console.error("Error:", err);
   console.error("Vue component:", vm);

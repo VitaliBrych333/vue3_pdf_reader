@@ -86,7 +86,7 @@ export default {
 
     async login() {
       const { email, password } = this
-      const options = useRequestInit('POST', { email, password })
+      const options = useRequestInit('POST', { email, password }, true)
       const response = await fetch('http://localhost:8081/login', options)
 
       // нужно вернуть user_Id, чтобы добавлять для документов
@@ -107,7 +107,7 @@ export default {
 
     async register() {
       const { firstName, lastName, email, password } = this
-      const options = useRequestInit('POST', { firstName, lastName, email, password })
+      const options = useRequestInit('POST', { firstName, lastName, email, password }, true)
       const response = await fetch('http://localhost:8081/register', options)
 
       if (response.ok) {
@@ -160,7 +160,7 @@ export default {
     :showMessage="isVisibleMessage"
     :title="messageTitle"
     :text="messageText"
-    @closeMessage="closeMessage"
+    @clickOk="closeMessage"
   />
 
   <v-form class="form" v-model="validForm" @submit.prevent="submit">

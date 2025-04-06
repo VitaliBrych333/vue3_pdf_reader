@@ -11,12 +11,12 @@ export default {
 </script>
 
 <template>
-  <ErrorBoundary>
+  <!-- <ErrorBoundary> -->
     <div class="viewer">
       <ViewerReader :isWrappedView="false" />
     </div>
     <footer></footer>
-  </ErrorBoundary>
+  <!-- </ErrorBoundary> -->
 </template>
 
 <style scoped>

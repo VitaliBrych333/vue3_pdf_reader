@@ -7,8 +7,13 @@ import { ActionNames } from '../shared/actionNames.enum'
 import { PresetsZoomSize } from '../shared/controls.enum'
 import { storeDocument } from '../store/storeDocument'
 import { storeUser } from '../store/storeUser'
-import { getId } from '../utils/utils'
 import { useRequestInit } from '../composables/useRequestInit'
+
+import * as PDFJS from 'pdfjs-dist'
+import { v4 as uuid } from 'uuid'
+import { ref } from 'vue'
+import { IDocument, IFileDocument, IPage, IReqSaveDocuments } from '../shared/document.interface'
+import { Document, Page, Prefixes } from '../utils/utils'
 
 export default {
   props: [
@@ -20,8 +25,8 @@ export default {
     'isFirstViewer',
     'isSecondViewer',
     'indexActiveFirstPageId',
-    'countDocuments',
-    'countSelectedPage'
+    'countSelectedPages',
+    'countSelectedDocs',
   ],
 
   emits: [
@@ -30,14 +35,14 @@ export default {
     'selectZoom',
     'rotate',
     'showAnnotations',
-    'changeIndexActiveFirstPageId'
+    'changeIndexActiveFirstPageId',
   ],
 
   components: {
     MessageWindow,
     DialogWindow,
     DocumentPanel,
-    ControlsEdit
+    ControlsEdit,
   },
 
   data() {
@@ -48,7 +53,8 @@ export default {
       storeDocument,
       messageTitle: '',
       messageText: '',
-      isVisibleMessage: false,
+      showBtnCancel: false,
+      visibleMessage: false,
       dialogBtnOk: ActionNames.CREATE,
       presetsZoom: [...Object.values(PresetsZoomSize)],
       pathSelectorSelect: `${this.isCompareView ? (this.isFirstViewer ? '.first' : '.second') : ''}.zoom-select-wrapper .select`,
@@ -57,10 +63,19 @@ export default {
   },
 
   mounted() {
+    // console.log('mounted header', this)
     if (this.isCompareView) {
       this.selectZoom(PresetsZoomSize.HEIGHT)
-    } else {
-      this.setValueZoomInSelect(`${this.scale}%`, this.scale)
+      return
+    }
+
+    this.setValueZoomInSelect(`${this.scale}%`, this.scale)
+  },
+
+  computed: {
+    saveActive() {
+      // return storeDocument.rotatePages.length || storeDocument.editActions.length
+      return true
     }
   },
 
@@ -97,51 +112,6 @@ export default {
 
     showDialogCreateNewDocument() {
       this.showCreateNewDoc = true
-      // const { firstName, lastName, email, password } = this;
-
-      // const options = this.getRequestOptions('GET');
-      // const response = await fetch('http://localhost:8081/documents/create', options);
-
-      // const data = await response.blob();
-
-      // fetch('http://localhost:8081/document/createNew', options)
-      // .then((response) => response.blob())
-      // .then((blob) => URL.createObjectURL(blob))
-      // .then((href) => {
-
-      //   console.log('ffffffffffffffffffffff---href', href)
-      //   const a = document.createElement("a")
-      //   document.body.appendChild(a)
-      //   a.style = "display: none"
-      //   a.href = href
-
-      //   storeFile.setFile(href)
-      //   a.download = 'hello.pdf'
-      //   a.click()
-      // })
-
-      // console.log('createNewDocument---------response', response)
-
-      // storeFile.setFile('http://localhost:8081/documents/create')
-
-      // this.$emit('generatedDocument', response.body);
-
-      // if (response.ok) {
-      //   const data = await response.json();
-
-      //   if (data?.id) {
-      //      this.showDialog('Succes', 'Register succes! Please Log in now.', true);
-      //   } else {
-      //     this.showDialog('Failed', 'Something wrong! Please try again.', true);
-      //   }
-
-      // } else {
-      //   this.showDialog('Failed', 'Something wrong! Please try again.', true);
-      // }
-
-      // storeDocument.createNewDocument('http://localhost:8081/documents/create');
-
-      // storeDocument.setUsePdf('http://localhost:8081/documents/create');
     },
 
     closeCreateNewDoc() {
@@ -151,128 +121,236 @@ export default {
     async createNewDoc(value: { docName: string; docText: string }) {
       const { docName, docText } = value
 
-      let baseUrl = 'http://localhost:8081/documents/create'
-
-      if (docName) {
-        baseUrl += `?docName=${docName}`
-      } else {
-        baseUrl += '?docName=new_document'
-      }
+      let baseUrl = `http://localhost:8081/documents/create?documentName=${docName}`
 
       if (docText) {
-        baseUrl += `&docText=${docText}`
+        baseUrl += `&documentText=${docText}`
       }
 
-      // const options = useRequestInit('GET')
-      // const response = await fetch(baseUrl, options)
+      const options = useRequestInit('GET')
 
-      // // // нужно вернуть user_Id, чтобы добавлять для документов
+      try {
+        const response = await fetch(baseUrl, options)
+        const data = await response.blob();
+        const url = URL.createObjectURL(data)
+        const loadingTask = PDFJS.getDocument(url)
 
-      // if (response.ok) {
-      //   const data = await response.json();
+        await loadingTask.promise
+          .then((res: PDFJS.PDFDocumentProxy) => {
+            const numPages = res.numPages
+            const url = ref()
+            url.value = loadingTask
 
-      //   console.log('response------', response, data)
+            const pages = []
+            const newDocId = `${Prefixes.NEW_DOC}-${uuid()}`
 
-      //   // if (data.userId && data.status === 'Success') {
-      //   //   storeUser.setUserId(data.userId)
+            for (let i = 0; i < numPages; i++) {
+              const numPage = i + 1
+              const page = new Page(numPage, newDocId, numPage, url)
+              pages.push(page)
+            }
 
-      //   // } else {
-      //   //   // this.showDialog('Failed', 'Invalid email or password! Please try again.', true)
-      //   // }
+            const doc = new Document(`${docName}.pdf`, pages, newDocId)
+            const positionIndex = storeDocument.documents.length;
 
-      // } else {
-      //   this.showMessage('Failed', 'Can not create document! Please try again.', true)
-      // }
+            // storeDocument.setDocument(doc, positionIndex)
+            storeDocument.addDocument(doc, positionIndex)
+          })
 
-      // storeDocument.setBaseUrl(baseUrl);
+      } catch (err) {
+        this.showMessage('Some failed', 'Could not create new document!', true)
+      }
 
-      console.log('ffffffffffff', baseUrl)
-      const newId = getId()
-      storeDocument.setUsePdf(newId, `${docName}.pdf`, baseUrl)
       this.closeCreateNewDoc()
     },
-    // requestInit(method: string, body: object | null = null) {
-    //   const init: RequestInit = {
-    //     method,
-    //     headers: { 'Content-Type': 'application/json' },
-    //     credentials: 'include' // "include" | "omit" | "same-origin" - to get in response a cookie with token and set in the browser
-    //   };
 
-    //   if (body) {
-    //     // init['body'] = JSON.stringify(body);
-    //     init['body'] = body;
-    //   }
-
-    //   return init;
-    // },
-
-    showMessage(title: string, text: string, show: boolean) {
+    showMessage(title: string, text: string, show: boolean, showBtnCancel = false) {
       this.messageTitle = title
       this.messageText = text
-      this.isVisibleMessage = show
+      this.visibleMessage = show
+      this.showBtnCancel = showBtnCancel
     },
 
     closeMessage() {
-      this.isVisibleMessage = false
+      this.visibleMessage = false
     },
 
-    async getDocuments(): Promise<FormData> {
+    clickOkMessage() {
+      if (this.messageTitle === 'Warning') {
+        this.$router.push({ name: 'docReader' })
+      }
+
+      this.visibleMessage = false
+    },
+
+    // getDocuments(): Promise<FormData> {
+    //   return new Promise(async(resolve, reject) => {
+    //     const formData = new FormData()
+
+    //     storeDocument.documents.forEach(async (doc, index) => {
+    //       const pdfDocumentProxy = await doc.pages[0].url.promise
+
+    //       pdfDocumentProxy.getData().then((arrayBuffer: Uint8Array) => {
+    //         const blobFile = new Blob([arrayBuffer], { type: 'application/pdf' })
+    //         formData.append('userIds[]', storeUser.userId)
+    //         formData.append('documentIds[]', doc.id)
+    //         formData.append('documentNames[]', doc.name)
+    //         formData.append('files[]', blobFile)
+    //         formData.append('info[]', null)
+
+
+    //         if (index + 1 === storeDocument.documents.length) {
+    //           // editAcions: storeDocument.editActions,
+    //           // rotate: storeDocument.rotatePages
+    //           // formData.append('rotate', storeDocument.rotatePages)
+    //           resolve(formData)
+    //         }
+    //       })
+    //     })
+    //   })
+    // },
+
+//     const promise2 = new Promise((resolve, reject) =>
+//   setTimeout(reject, 100, "foo"),
+// );
+// const promises = [promise1, promise2];
+
+// Promise.allSettled(promises).then((results) =>
+//   results.forEach((result) => console.log(result.status)),
+// );
+
+    getNewDocuments(): Promise<IFileDocument[]> {
       return new Promise((resolve, reject) => {
-        const formData = new FormData()
+        const documents = [];
+        const newDocuments = storeDocument.documents.filter(doc => doc.id.startsWith(Prefixes.NEW_DOC))
+        const countNewDocuments = newDocuments.length
 
-        storeDocument.documents.forEach(async (doc, index) => {
-          const pdfDocumentProxy = await doc.url.pdf.promise
+        if (countNewDocuments) {
+          newDocuments.forEach(async (doc) => {
+            try {
+              const document = {} as IFileDocument
+              const pdfDocumentProxy = await doc.pages[0].url.promise
+              const arrayBuffer = await pdfDocumentProxy.getData()
 
-          pdfDocumentProxy.getData().then((arrayBuffer: Uint8Array) => {
-            const blobFile = new Blob([arrayBuffer], { type: 'application/pdf' })
+              // document.userId = storeUser.userId
+              document.id = doc.id
+              document.name = doc.name
+              document.file = btoa(String.fromCharCode(...arrayBuffer))
+              document.pages = doc.pages.map((page) => (({ url, ...rest }) => rest)(page) as IPage)
+              document.info = null
 
-            formData.append('userIds[]', storeUser.userId)
-            formData.append('names[]', doc.name)
-            formData.append('files[]', blobFile)
-            formData.append('info[]', null)
+              documents.push(document)
 
-            if (index + 1 === storeDocument.documents.length) {
-              resolve(formData)
+              if (documents.length === countNewDocuments) {
+                resolve(documents)
+              }
+            } catch (err) {
+              reject(err)
             }
           })
-        })
+
+        } else {
+          resolve([])
+        }
+
       })
     },
 
     async save() {
-      const docsFormData = await this.getDocuments()
-      const response = await fetch('http://localhost:8081/documents/save', {
-        method: 'POST',
-        // headers: { 'Content-Type': 'application/json' },  //application/x-www-form-urlencoded
-        // headers: { 'Content-Type': 'application/json', 'Content-Disposition': 'form-data'},
-        // headers: { 'Content-Type': 'multipart/form-data' },
-        // headers: { 'Content-Type': 'form-data' },
-        credentials: 'include',
-        body: docsFormData,
-      })
+      try {
+        const data: IReqSaveDocuments = {
+          userId: storeUser.userId,
+          rotate: storeDocument.rotatePages
+        }
 
-      console.log('000000-----response----------', response)
+        if (this.isEditMode) {
+          data.editActions = storeDocument.editActions
+        } else {
+          const newDocuments = await this.getNewDocuments()
+          data.newDocuments = newDocuments
+
+          console.log('11111111111111111', data.newDocuments)
+        }
+
+        const options = useRequestInit('POST', data, true)
+        console.log('dddddddddddd---------send', data )
+
+        // const response = await fetch('http://localhost:8081/documents/saveActions', options)
+        const response = await fetch('http://localhost:8081/documents/saveDocuments', options)
+
+        if (response.ok) {
+          this.$router.push({ name: 'docReader' })
+        } else {
+          this.showMessage('Some failed', 'Could not save the documents!', true)
+        }
+
+        // response.ok
+        //   ? this.$router.push({ name: 'docReader' })
+        //   : this.showMessage('Some failed', 'Could not save the documents!', true)
+
+      } catch (err) {
+        this.showMessage('Some failed', 'Could not save the documents!', true)
+
+      }
     },
 
     exit() {
-      console.log('000000-----exit----------')
+      if (this.saveActive) {
+        this.showMessage('Warning', 'There are some unsaved changes. Are you sure ?', true, true)
+        return
+      }
+
       this.$router.push({ name: 'docReader' })
     },
 
-    handleFileChange(event) {
-      console.log('handleFileChange--------', this.$refs.file.value, event.target.files)
-
+    async handleFileChange(event) {
       const files = Array.from(event.target.files)
       let countError = 0
+
+      const docsLoadingTask = []
 
       files.forEach((file: File) => {
         if (file.type !== 'application/pdf') {
           countError++
         } else {
           const url = URL.createObjectURL(file)
-          const newId = getId()
-          storeDocument.setUsePdf(newId, file.name, url)
+          const loadingTask = PDFJS.getDocument(url)
+          docsLoadingTask.push({ name: file.name, loadingTask })
         }
+      })
+
+      await Promise.allSettled(
+        docsLoadingTask.map((docLoading) => docLoading.loadingTask.promise)
+      ).then((results) => {
+        results
+          .filter(result => result.status === 'rejected')
+          .forEach(() => countError++)
+
+        results
+          .filter(result => result.status === 'fulfilled')
+          .forEach((result: PromiseFulfilledResult<PDFJS.PDFDocumentProxy>, index: number) => {
+            const docLoading = docsLoadingTask[index]
+            const numPages = result.value.numPages
+            const url = ref()
+            url.value = docLoading.loadingTask
+
+            const pages = []
+            const newDocId = `${Prefixes.NEW_DOC}-${uuid()}`
+            const { name } = docLoading
+
+            for (let i = 0; i < numPages; i++) {
+              const numPage = i + 1
+              const page = new Page(numPage, newDocId, numPage, url)
+              pages.push(page)
+            }
+
+            const doc = new Document(name, pages, newDocId)
+            const positionIndex = storeDocument.documents.length + index;
+
+            storeDocument.setDocument(doc, positionIndex)
+
+            // storeDocument.addDocument(doc, positionIndex)
+          })
       })
 
       if (countError) {
@@ -295,29 +373,34 @@ export default {
 
       storeDocument.selectedDocIds.forEach(async (docId) => {
         try {
-          const response = await fetch(`http://localhost:8081/documents/${docId}`, options)
+          if (docId.startsWith(Prefixes.NEW_DOC)) {
+            const doc= storeDocument.documents.find(doc => doc.id === docId)
+            const pdfDocumentProxy = await doc.pages[0].url.promise
 
-          if (response.status === 200) {
-            const data = await response.json()
-            const binaryFile = atob(data.file)
-            const array = new Uint8Array(binaryFile.length)
+            pdfDocumentProxy
+              .getData()
+              .then((arrayBuffer: Uint8Array) => this.downloadDocument(arrayBuffer, doc.name))
 
-            for (let i = 0; i < binaryFile.length; i++) {
-              array[i] = binaryFile.charCodeAt(i)
-            }
-
-            const url = URL.createObjectURL(new Blob([array], { type: 'application/pdf' }))
-            const a = document.createElement('a')
-
-            a.href = url
-            a.download = data.name
-            document.body.appendChild(a)
-            a.click()
-            a.remove()
-            window.URL.revokeObjectURL(url)
           } else {
-            throw new Error(response.statusText)
+            const response = await fetch(`http://localhost:8081/documents/${docId}`, options)
+
+            if (response.status === 200) {
+              const data = await response.json()
+              const binaryFile = atob(data.file)
+              const length = binaryFile.length
+              const arrayBuffer = new Uint8Array(length)
+
+              for (let i = 0; i < length; i++) {
+                arrayBuffer[i] = binaryFile.charCodeAt(i)
+              }
+
+              this.downloadDocument(arrayBuffer, data.name)
+
+            } else {
+              throw new Error(response.statusText)
+            }
           }
+
         } catch (error) {
           console.error('Error download file:', error)
         }
@@ -336,19 +419,32 @@ export default {
       })
     },
 
+    downloadDocument(arrayBuffer: Uint8Array, name: string) {
+      const url = URL.createObjectURL(new Blob([arrayBuffer], { type: 'application/pdf' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    },
+
     print() {
       // TODO:
       console.log('printer')
-    }
+    },
   },
 }
 </script>
 <template>
   <MessageWindow
-    :showMessage="isVisibleMessage"
+    :showMessage="visibleMessage"
     :title="messageTitle"
     :text="messageText"
-    @closeMessage="closeMessage"
+    :showBtnCancel="showBtnCancel"
+    @clickCancel="closeMessage"
+    @clickOk="clickOkMessage"
   />
 
   <DialogWindow
@@ -367,11 +463,15 @@ export default {
       'right-panel': rightPanel && !leftPanel,
       'mixed-panel': rightPanel && leftPanel,
       'compare-view': isCompareView,
-      'second': isSecondViewer
+      second: isSecondViewer,
     }"
   >
     <v-layout>
-      <v-app-bar :class="{ 'edit-mode': isEditMode }" :color="isEditMode ? 'light-green-lighten-1' : 'primary'" prominent>
+      <v-app-bar
+        :class="{ 'edit-mode': isEditMode }"
+        :color="isEditMode ? 'light-green-lighten-1' : 'primary'"
+        prominent
+      >
         <v-btn
           v-if="isCompareView && isSecondViewer"
           icon
@@ -409,7 +509,8 @@ export default {
                 </v-btn>
 
                 <div class="doc-counter">
-                  {{ countDocuments ? indexActiveFirstPageId + 1 : 0 }} / {{ countDocuments }}
+                  {{ storeDocument.documents.length ? indexActiveFirstPageId + 1 : 0 }} /
+                  {{ storeDocument.documents.length }}
                 </div>
 
                 <v-btn
@@ -418,7 +519,7 @@ export default {
                   size="small"
                   :color="isEditMode ? 'yellow-lighten-1' : ''"
                   :variant="isEditMode ? 'elevated' : 'outlined'"
-                  :disabled="indexActiveFirstPageId + 1 >= countDocuments"
+                  :disabled="indexActiveFirstPageId + 1 >= storeDocument.documents.length"
                   @click="$emit('changeIndexActiveFirstPageId', 1)"
                 >
                   <v-icon>mdi-chevron-right</v-icon>
@@ -428,8 +529,13 @@ export default {
 
               <div class="buttons-pages">
                 <div class="buttons-rotate">
-
-                  <v-badge class="mr-3" color="deep-orange-lighten-2" :model-value="activeRotate" max="99" :content="countSelectedPage">
+                  <v-badge
+                    class="mr-3"
+                    :color="countSelectedPages ? 'pink-darken-1' : 'deep-orange-lighten-2'"
+                    :model-value="activeRotate"
+                    max="99"
+                    :content="countSelectedPages || countSelectedDocs"
+                  >
                     <v-btn
                       icon
                       size="small"
@@ -443,7 +549,13 @@ export default {
                     </v-btn>
                   </v-badge>
 
-                  <v-badge class="mr-3" color="deep-orange-lighten-2" :model-value="activeRotate" max="99" :content="countSelectedPage">
+                  <v-badge
+                    class="mr-3"
+                    :color="countSelectedPages ? 'pink-darken-1' : 'deep-orange-lighten-2'"
+                    :model-value="activeRotate"
+                    max="99"
+                    :content="countSelectedPages || countSelectedDocs"
+                  >
                     <v-btn
                       icon
                       size="small"
@@ -577,7 +689,13 @@ export default {
                 </v-btn>
               </div>
 
-              <v-divider v-if="!isCompareView" vertical thickness="2" inset class="mx-3"></v-divider>
+              <v-divider
+                v-if="!isCompareView"
+                vertical
+                thickness="2"
+                inset
+                class="mx-3"
+              ></v-divider>
 
               <div v-if="!isCompareView" class="actions-files">
                 <v-btn
@@ -622,7 +740,13 @@ export default {
                   <v-tooltip activator="parent" location="bottom">Upload File</v-tooltip>
                 </v-btn>
 
-                <v-badge class="mx-3" color="deep-orange-lighten-2" :model-value="!!storeDocument.selectedDocIds.length" max="99" :content="storeDocument.selectedDocIds.length">
+                <v-badge
+                  class="mx-3"
+                  color="deep-orange-lighten-2"
+                  :model-value="!!storeDocument.selectedDocIds.length"
+                  max="99"
+                  :content="storeDocument.selectedDocIds.length"
+                >
                   <v-btn
                     icon
                     size="small"
@@ -635,7 +759,13 @@ export default {
                   </v-btn>
                 </v-badge>
 
-                <v-badge class="mr-1" color="deep-orange-lighten-2" :model-value="!!storeDocument.selectedDocIds.length" max="99" :content="storeDocument.selectedDocIds.length">
+                <v-badge
+                  class="mr-1"
+                  color="deep-orange-lighten-2"
+                  :model-value="!!storeDocument.selectedDocIds.length"
+                  max="99"
+                  :content="storeDocument.selectedDocIds.length"
+                >
                   <v-btn
                     icon
                     size="small"
@@ -648,26 +778,42 @@ export default {
                   </v-btn>
                 </v-badge>
               </div>
+            </div>
 
-              <v-divider vertical thickness="2" inset class="mx-3"></v-divider>
+            <v-divider
+              v-if="!isCompareView"
+              :color="isEditMode ? 'black' : ''"
+              vertical
+              thickness="2"
+              inset
+              class="mx-3"
+            ></v-divider>
 
-              <div class="action-save">
-                <v-btn icon class="mr-1" size="small" variant="outlined" @click="save">
-                  <v-icon>mdi-content-save-all-outline</v-icon>
-                  <v-tooltip activator="parent" location="bottom">Save</v-tooltip>
-                </v-btn>
+            <div v-if="!isCompareView" class="action-save">
+              <v-btn
+                icon
+                class="mr-1"
+                size="small"
+                :variant="isEditMode ? 'elevated' : 'outlined'"
+                :color="isEditMode ? 'yellow-lighten-1' : ''"
+                :disabled="!saveActive"
+                @click="save"
+              >
+                <v-icon>mdi-content-save-all-outline</v-icon>
+                <v-tooltip activator="parent" location="bottom">Save</v-tooltip>
+              </v-btn>
 
-                <v-btn
-                  icon
-                  class="mr-1"
-                  size="small"
-                  variant="outlined"
-                  @click="exit"
-                >
-                  <v-icon>mdi-location-exit</v-icon>
-                  <v-tooltip activator="parent" location="bottom">Exit</v-tooltip>
-                </v-btn>
-              </div>
+              <v-btn
+                icon
+                class="mr-1"
+                size="small"
+                :variant="isEditMode ? 'elevated' : 'outlined'"
+                :color="isEditMode ? 'yellow-lighten-1' : ''"
+                @click="exit"
+              >
+                <v-icon>mdi-location-exit</v-icon>
+                <v-tooltip activator="parent" location="bottom">Exit</v-tooltip>
+              </v-btn>
             </div>
           </div>
         </v-spacer>
@@ -694,14 +840,13 @@ export default {
           <v-icon>mdi-file-eye-outline</v-icon>
           <v-tooltip activator="parent" location="bottom">View Mode</v-tooltip>
         </v-btn>
-
       </v-app-bar>
 
       <v-navigation-drawer
         v-model="leftPanel"
         class="left-list-panel"
         :class="{
-          'active': leftPanel,
+          active: leftPanel,
         }"
         :location="$vuetify.display.mobile ? 'top' : undefined"
         temporary
@@ -725,7 +870,7 @@ export default {
         :location="$vuetify.display.mobile ? 'bottom' : 'right'"
         class="right-list-panel"
         :class="{
-          'active': rightPanel,
+          active: rightPanel,
           'panel-width': rightPanel && !$vuetify.display.mobile,
           'panel-height': $vuetify.display.mobile,
         }"
@@ -759,7 +904,8 @@ export default {
   padding-left: 4px;
 }
 
-.right-list-panel, .left-list-panel {
+.right-list-panel,
+.left-list-panel {
   transition: none;
 }
 
@@ -799,7 +945,9 @@ export default {
   color: white;
 }
 
-.controls button, .btn-wrapped-view, .btn-view-mode {
+.controls button,
+.btn-wrapped-view,
+.btn-view-mode {
   border-radius: 10%;
 }
 
@@ -867,12 +1015,18 @@ export default {
   padding-right: 0;
 }
 
-.btn-zoom,
+.btn-zoom {
+  margin-left: 32px;
+}
+
 .btn-annotations {
   margin-left: 40px;
 }
 
-.compare-view .btn-zoom,
+.compare-view .btn-zoom {
+  margin-left: 14px;
+}
+
 .compare-view .btn-annotations {
   margin-left: 20px;
 }
@@ -907,7 +1061,7 @@ export default {
   height: 40px;
   line-height: 56px;
   /* color: #1867c0; */
-  color:black;
+  color: black;
   background-color: white;
   cursor: default;
   border: 1px solid white;
@@ -964,16 +1118,21 @@ export default {
     justify-content: flex-start;
     padding-right: 0;
   }
-}
 
-@media only screen and (max-width: 1670px) {
   .edit-mode .btn-zoom,
   .edit-mode .btn-annotations {
     margin-left: 0;
   }
 }
 
-@media only screen and (max-width: 1630px) {
+/* @media only screen and (max-width: 1670px) {
+  .edit-mode .btn-zoom,
+  .edit-mode .btn-annotations {
+    margin-left: 0;
+  }
+} */
+
+@media only screen and (max-width: 1670px) {
   .buttons-pages {
     padding-left: 0;
   }
@@ -982,7 +1141,8 @@ export default {
     margin-left: 0;
   }
 
-  .compare-view .btn-zoom, .compare-view .btn-annotations {
+  .compare-view .btn-zoom,
+  .compare-view .btn-annotations {
     margin-left: 0;
   }
 }
@@ -1003,7 +1163,7 @@ export default {
     margin-left: 0;
   }
 
- .compare-view .buttons-pages {
+  .compare-view .buttons-pages {
     padding-right: 0;
   }
 }
@@ -1028,5 +1188,4 @@ export default {
     margin-inline-start: 2px;
   }
 }
-
 </style>

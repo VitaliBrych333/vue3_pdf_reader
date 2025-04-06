@@ -1,4 +1,6 @@
 <script lang="ts">
+import { Ref, ref } from 'vue'
+import * as PDFJS from 'pdfjs-dist'
 import LoaderSkeleton from '../components/LoaderSkeleton.vue'
 import PageView from '../components/PageView.vue'
 import HeaderMain from '../components/HeaderMain.vue'
@@ -6,30 +8,14 @@ import { storeDocument } from '../store/storeDocument'
 import { storeEditActions } from '../store/storeEditActions'
 import { storeUser } from '../store/storeUser'
 import { useRequestInit } from '../composables/useRequestInit'
-import {
-  deleteClassActiveForCopiedPages,
-  deleteClassActiveForNewDoc,
-  getWrapperPage,
-  getClassStartWith,
-  getSplittedPagesByLine,
-  getTranslateX,
-  pageIsInOneLine,
-} from '../utils/utilsDOM'
 import { PresetsZoomSize } from '../shared/controls.enum'
-import { Document } from '../shared/document.interface'
+import { IDocument, IPage } from '../shared/document.interface'
+import { Document, Page, getDocName } from '../utils/utils'
 
 export default {
-  props: [
-    'isEditMode',
-    'isWrappedView',
-    'isCompareView',
-    'isFirstViewer',
-    'isSecondViewer'
-  ],
+  props: ['isEditMode', 'isWrappedView', 'isCompareView', 'isFirstViewer', 'isSecondViewer'],
 
-  emits: [
-    'allLoaded',
-  ],
+  emits: ['allLoaded'],
 
   components: {
     HeaderMain,
@@ -41,27 +27,27 @@ export default {
     return {
       storeDocument,
       storeEditActions,
-      activeFirstPageId: null,
       indexActiveFirstPageId: 0,
-      firstPageIds: [],
-      pageIds: [],
       scale: this.isWrappedView ? 50 : this.isEditMode ? 35 : 100,
-      selectedPageIds: [],
-      selectedDocIds: [],
+      selectedPageIds: [], // for CompareView
+      selectedDocIds: [], // for CompareView
       isLastPageLoaded: false,
       annotations: false,
       scrollTop: {
         firstViewer: this.isCompareView ? 52 : 0,
         secondViewer: this.isCompareView ? 52 : 0,
       },
-      splittedPagesInDocsByLine: null,
+      pathViewer: this.isCompareView ? (this.isFirstViewer ? '.first' : '.second') : '',
     }
   },
 
   mounted() {
     if (!storeDocument.isDocumentsLoaded && !this.isSecondViewer) {
-      this.getDocuments().then((documents: Document[]) => {
-        documents.forEach((doc) => {
+      this.getDocuments().then(async (documents: Document[]) => {
+        const docsLoadingTask = []
+        // let countError = 0
+
+        documents.forEach(async (doc) => {
           const binaryFile = atob(doc.file)
           const array = new Uint8Array(binaryFile.length)
           const length = binaryFile.length
@@ -71,8 +57,39 @@ export default {
           }
 
           const url = URL.createObjectURL(new Blob([array], { type: 'application/json' }))
+          const loadingTask = PDFJS.getDocument(url)
 
-          storeDocument.setUsePdf(`${doc.id}`, doc.name, url)
+          docsLoadingTask.push({ doc, loadingTask })
+        })
+
+        await Promise.allSettled(
+          docsLoadingTask.map((docLoading) => docLoading.loadingTask.promise),
+        ).then((results) => {
+          if (results.some((result) => result.status === 'rejected')) {
+            console.warn('Some docs could not be loaded!')
+          }
+
+          results
+            .filter((result) => result.status === 'fulfilled')
+            .forEach((result: PromiseFulfilledResult<PDFJS.PDFDocumentProxy>, index: number) => {
+              const docLoading = docsLoadingTask[index]
+              const numPages = result.value.numPages
+              const url = ref()
+              url.value = docLoading.loadingTask
+
+              const pages = []
+              const { documentId, name } = docLoading.doc
+
+              for (let i = 0; i < numPages; i++) {
+                const numPage = i + 1
+                const page = new Page(numPage, documentId, numPage, url)
+                pages.push(page)
+              }
+
+              const doc = new Document(name, pages, documentId)
+
+              storeDocument.setDocument(doc, index)
+            })
         })
 
         storeDocument.setIsDocumentsLoaded(true)
@@ -81,12 +98,8 @@ export default {
   },
 
   beforeUnmount() {
-    if (this.isEditMode) {
-      window.removeEventListener('resize', this.handleResize)
-      storeEditActions.clearSelectedPageIds()
-    } else {
-      storeDocument.clearSelectedDocIds()
-    }
+    storeDocument.clearSelectedPageIds()
+    storeDocument.clearSelectedDocIds()
   },
 
   computed: {
@@ -111,16 +124,11 @@ export default {
     },
 
     activeRotate() {
-      if (this.isEditMode) {
-        return (
-          !!storeEditActions.selectedPageIds.length &&
-          storeEditActions.selectedPageIds.every(
-            (pageId) => !storeEditActions.copyPageIds.includes(pageId),
-          )
-        )
+      if (this.isCompareView) {
+        return !!this.selectedPageIds.length || !!this.selectedDocIds.length
       }
 
-      return !!this.selectedPageIds.length
+      return !!storeDocument.selectedPageIds.length || !!storeDocument.selectedDocIds.length
     },
   },
 
@@ -137,82 +145,30 @@ export default {
     },
 
     clickDocument(event: PointerEvent, docId: string) {
-      if (this.isEditMode && !event.ctrlKey) {
-        deleteClassActiveForNewDoc()
-      }
-
       if (this.isCompareView) {
+        this.selectedPageIds = []
         this.selectedDocIds = event.ctrlKey
           ? this.selectedDocIds.includes(docId)
-            ? [...this.selectedDocIds].filter(id => id !== docId)
-            : [...this.selectedDocIds].filter(id => id !== docId).concat(docId)
+            ? [...this.selectedDocIds].filter((id) => id !== docId)
+            : [...this.selectedDocIds].concat(docId)
           : [docId]
       } else {
+        storeDocument.clearSelectedPageIds()
         storeDocument.addSelectedDocId(docId, event.ctrlKey)
       }
     },
 
-    clickOutSidePage(event: PointerEvent, pageId: string) {
-      const target = event.target as HTMLElement
-
-      console.log('clickOutSidePage---------------', event, pageId, target, 'dddddddddd', target.className, target.nodeName)
-
-
-      if (!event.ctrlKey || (event.ctrlKey && !(target.className.startsWith('page') || target.nodeName === 'CANVAS'))) {
-      //  if (!event.ctrlKey) {
-        console.log('clickOutSidePage---------------',  this.selectedPageIds)
-        this.selectedPageIds = [...this.selectedPageIds].filter(id => id !== pageId)
-         console.log('clickOutSidePage---------------after',  this.selectedPageIds)
-      }
-
-
-      // // if (targetClass !== 'document-title' && targetClass !== 'document-number' && targetClass !== 'document-name') {
-      // if (!target.className.startsWith('document-')) {
-      //   if (this.isCompareView) {
-      //     this.selectedDocIds = []
-      //   } else {
-      //     storeDocument.clearSelectedDocIds()
-      //   }
-
-      //   deleteClassActiveForNewDoc()
-      // }
-
-      // if (this.isEditMode) {
-      //   if (target.nodeName !== 'CANVAS') {
-      //     storeEditActions.clearSelectedPageIds()
-      //     deleteClassActiveForCopiedPages()
-      //   }
-      // } else {
-      //   this.selectedPageIds = []
-      // }
-
-    },
-
     clickPage(event: PointerEvent, pageId: string) {
-      console.log('clickPage', pageId)
-      if (!this.editedDocIds.length) {
-
-        // if (this.isCompareView) {
-        //   this.selectedDocIds = []
-        // } else {
-        //   storeDocument.clearSelectedDocIds()
-        // }
-
-        if (this.isEditMode) {
-          deleteClassActiveForNewDoc()
-
-          if (!event.ctrlKey) {
-            deleteClassActiveForCopiedPages()
-          }
-
-          storeEditActions.addSelectedPageId(pageId, event.ctrlKey)
-        } else {
-          this.selectedPageIds = event.ctrlKey
-            ? this.selectedPageIds.includes(pageId)
-              ? [...this.selectedPageIds].filter(id => id !== pageId)
-              : [...this.selectedPageIds].filter(id => id !== pageId).concat(pageId)
-            : [pageId]
-        }
+      if (this.isCompareView) {
+        this.selectedDocIds = []
+        this.selectedPageIds = event.ctrlKey
+          ? this.selectedPageIds.includes(pageId)
+            ? [...this.selectedPageIds].filter((id) => id !== pageId)
+            : [...this.selectedPageIds].concat(pageId)
+          : [pageId]
+      } else {
+        storeDocument.clearSelectedDocIds()
+        storeDocument.addSelectedPageId(pageId, event.ctrlKey)
       }
     },
 
@@ -225,58 +181,20 @@ export default {
         storeDocument.setActiveDocId(firstDoc.id)
       }
 
-      if (this.isEditMode) {
-        this.splittedPagesInDocsByLine = getSplittedPagesByLine()
-        window.addEventListener('resize', this.handleResize)
-      }
-
       if (this.isCompareView) {
-        this.$emit('allLoaded', true);
+        this.$emit('allLoaded', true)
       }
     },
 
     clickWrapper(event: PointerEvent) {
-      const target = event.target as HTMLElement
-
-      // if (targetClass !== 'document-title' && targetClass !== 'document-number' && targetClass !== 'document-name') {
-      if (!target.className.startsWith('document-')) {
-        if (this.isCompareView) {
-          this.selectedDocIds = []
-        } else {
-          storeDocument.clearSelectedDocIds()
-        }
-
-        deleteClassActiveForNewDoc()
-      }
-
-      if (this.isEditMode) {
-        if (target.nodeName !== 'CANVAS') {
-          storeEditActions.clearSelectedPageIds()
-          deleteClassActiveForCopiedPages()
-        }
-      } else {
-        this.selectedPageIds = []
-      }
-    },
-
-    clickOutSideDocName(event: PointerEvent, docId: string) {
-      const target = event.target as HTMLElement
-      console.log('clickOutSideDocName-----docId', event, target, docId, this.selectedDocIds)
-      // console.log('clickOutSideDocName-----11111', target, event.ctrlKey, 'bbbb', this, this.isFirstViewer, this.selectedDocIds)
-
-
       if (this.isCompareView) {
-        // this.selectedDocIds = [...this.selectedDocIds].filter((id) => id !== docId)
-        this.selectedDocIds = event.ctrlKey && target.className.startsWith('document-')
-          ? [...this.selectedDocIds]
-          : [...this.selectedDocIds].filter((id) => id !== docId)
-
-      } else {
-
-        if (!target.className.startsWith('document-')) {
-          storeDocument.clearSelectedDocIds()
-        }
+        this.selectedDocIds = []
+        this.selectedPageIds = []
+        return
       }
+
+      storeDocument.clearSelectedDocIds()
+      storeDocument.clearSelectedPageIds()
     },
 
     zoom(value: number) {
@@ -302,7 +220,7 @@ export default {
         scaleIndex = Math.round((heigthWrapperDocuments / maxHeigthPage) * 100)
         this.scale = Math.round((this.scale * scaleIndex) / 100)
       } else if (zoomPreset === PresetsZoomSize.WIDTH) {
-        const withWrapperDocuments = wrapperDocuments.clientWidth - 24 // add margin 12px
+        const withWrapperDocuments = wrapperDocuments.clientWidth - 34 // add margin 12px and padding 5px
         const maxWidthPage = Math.max.apply(
           null,
           Array.from(pages).map((page) => page.clientWidth),
@@ -332,156 +250,67 @@ export default {
     },
 
     rotate(value: number) {
-      if (this.isEditMode) {
-        this.$refs.refPage.forEach((refPage) => {
-          if (storeEditActions.selectedPageIds.includes(refPage.pageId)) {
-            refPage.rotatePage(value)
-          }
-        })
-
-        storeEditActions.selectedPageIds
-          .filter((pageId) => pageId.includes('copied'))
-          .forEach((pageId) => {
-            const targePageElement = getWrapperPage(pageId)
-            const targetClassList = targePageElement.classList
-            const targetClass = getClassStartWith(targePageElement, 'rotate_')
-
-            const difHeightWidth = targePageElement.clientHeight - targePageElement.clientWidth
-            const halfDifHeightWidth = difHeightWidth / 2
-            const targetOffsetTop = targePageElement.offsetTop
-
-            const wrapperPagesElement = targePageElement.closest('.wrapper-pages')
-            const allPagesOnOneLine = Array.from(
-              wrapperPagesElement.querySelectorAll('.wrapper-page'),
-            ).filter((pageElement: HTMLElement) =>
-              pageIsInOneLine(pageElement, targetOffsetTop, halfDifHeightWidth),
-            )
-
-            const indexTargetPage = allPagesOnOneLine.indexOf(targePageElement)
-
-            let degree = 0
-
-            if (targetClass) {
-              const curentValue = +targetClass.slice(7)
-              targetClassList.remove(targetClass)
-
-              if (curentValue !== (value === 90 ? 270 : 90)) {
-                degree = curentValue + value
-                targetClassList.add(`rotate_${degree}`)
-              }
-            } else {
-              degree = value === 90 ? 90 : 270
-              targetClassList.add(`rotate_${degree}`)
-            }
-
-            allPagesOnOneLine.forEach((pageElement: HTMLElement, index: number) => {
-              const curPageTranslateX = getTranslateX(pageElement)
-
-              if (degree === 90 || degree === 270) {
-                if (index < indexTargetPage) {
-                  pageElement.style.translate = `${curPageTranslateX - halfDifHeightWidth}px 0px`
-                } else if (index > indexTargetPage) {
-                  pageElement.style.translate = `${curPageTranslateX + halfDifHeightWidth}px 0px`
-                }
-              } else {
-                // 180 360/0
-                if (index < indexTargetPage) {
-                  pageElement.style.translate = `${curPageTranslateX + halfDifHeightWidth}px 0px`
-                } else if (index > indexTargetPage) {
-                  pageElement.style.translate = `${curPageTranslateX - halfDifHeightWidth}px 0px`
-                }
-              }
-            })
-          })
-
-        const selectedPageIds = [...storeEditActions.selectedPageIds]
-        storeEditActions.clearSelectedPageIds()
-
-        requestAnimationFrame(() => {
-          selectedPageIds.forEach((pageId) => storeEditActions.addSelectedPageId(pageId, true)) // workaround to trigger check isCopydDisabled after rotate landscape pages
-          this.handleResize()
-        })
+      if (this.isCompareView) {
+        if (this.selectedDocIds.length) {
+          this.selectedDocIds.forEach((id: string) =>
+            storeDocument.documents
+              .find((doc) => doc.id === id)
+              .pages.forEach((page) =>
+                this.$refs.refPage
+                  .find((refPage) => refPage.page.pageId === page.pageId)
+                  .rotatePage(value),
+              ),
+          )
+        } else {
+          this.selectedPageIds.forEach((id: string) =>
+            this.$refs.refPage.find((refPage) => refPage.page.pageId === id).rotatePage(value),
+          )
+        }
       } else {
-        this.$refs.refPage.forEach((refPage) => {
-          if (this.selectedPageIds.includes(refPage.pageId)) {
-            refPage.rotatePage(value)
-          }
-        })
+        if (storeDocument.selectedDocIds.length) {
+          storeDocument.selectedDocIds.forEach((id) =>
+            storeDocument.documents
+              .find((doc) => doc.id === id)
+              .pages.forEach((page) => storeDocument.rotate(page.pageId, value)),
+          )
+        } else {
+          storeDocument.selectedPageIds.forEach((id) => storeDocument.rotate(id, value))
+        }
       }
     },
 
     async showAnnotations() {
       this.annotations = !this.annotations
-
       // const existingPdfBytes = await fetch(storeDocument.baseUrl).then(res => res.arrayBuffer())
       // const pdfDoc = await PDFDocument.load(existingPdfBytes)
       //  console.log('show annotation', pdfDoc)
       //  const page = pdfDoc.addPage()
     },
 
-    addPageId(pageId: string) {
-      this.pageIds = [...this.pageIds].concat(pageId)
-    },
-
-    addFirstPageId(pageId: string, indexDoc: number) {
-      this.firstPageIds[indexDoc] = pageId
-    },
-
     changeIndexActiveFirstPageId(value: number) {
+      const docs = storeDocument.documents
       this.indexActiveFirstPageId += value
-      this.activeFirstPageId = this.firstPageIds[this.indexActiveFirstPageId]
+      const pageId = docs.map((doc) => doc.pages[0].pageId)[this.indexActiveFirstPageId]
+
+      this.navigateToPage(pageId)
 
       if (!this.isCompareView) {
-        const docs = storeDocument.documents
         storeDocument.setActiveDocId(docs[this.indexActiveFirstPageId].id)
       }
+
+      // console.log('dddddddd----this.indexActiveFirstPageId', this.indexActiveFirstPageId)
     },
 
-    handleResize() {
-      if (this.isEditMode) {
-        const docs = Array.from(document.querySelectorAll('.wrapper-document'))
+    navigateToPage(pageId: string) {
+      const element = this.isCompareView
+        ? (document
+            .querySelector(`.wrapper-documents${this.pathViewer}`)
+            .querySelector(`#${pageId}`) as HTMLElement)
+        : (document.querySelector(`#${pageId}`) as HTMLElement)
+      const elementWrapper = element.closest('.wrapper-documents') as HTMLElement
 
-        docs.forEach((docElement) => {
-          const beforeResizeSplittedPages = this.splittedPagesInDocsByLine.get(docElement.id)
-          const afterResizeSplittedPages = getSplittedPagesByLine().get(docElement.id)
-
-          afterResizeSplittedPages.forEach((linePages, index) => {
-            if (
-              !linePages.every(
-                (page, indexLine) => page === beforeResizeSplittedPages?.[index]?.[indexLine],
-              ) ||
-              linePages.length !== beforeResizeSplittedPages[index]?.length
-            ) {
-              linePages.forEach((page: HTMLElement) => (page.style.translate = '0px 0px'))
-              const pageElements = linePages.filter((page: HTMLElement) =>
-                getClassStartWith(page, 'rotate_'),
-              )
-
-              pageElements.forEach((page) => {
-                const targetClass = getClassStartWith(page, 'rotate_')
-                const curentValue = +targetClass.slice(7)
-                const difHeightWidth = page.clientHeight - page.clientWidth
-                const halfDifHeightWidth = difHeightWidth / 2
-                const indexTargetPage = linePages.indexOf(page)
-
-                linePages.forEach((pageElement: HTMLElement, index: number) => {
-                  const curPageTranslateX = getTranslateX(pageElement)
-
-                  if (curentValue === 90 || curentValue === 270) {
-                    if (index < indexTargetPage) {
-                      pageElement.style.translate = `${curPageTranslateX - halfDifHeightWidth}px 0px`
-                    } else if (index > indexTargetPage) {
-                      pageElement.style.translate = `${curPageTranslateX + halfDifHeightWidth}px 0px`
-                    }
-                  }
-                })
-              })
-            }
-          })
-        })
-
-        this.splittedPagesInDocsByLine = getSplittedPagesByLine()
-      }
+      element?.scrollIntoView({ behavior: 'auto', block: 'start' })
+      elementWrapper?.scrollBy(0, -60) // for first pages of docs (to show the name doc)
     },
 
     handleScroll(event: Event) {
@@ -502,7 +331,6 @@ export default {
             this.scrollTop.firstViewer = targetElement.scrollTop
 
             requestAnimationFrame(() => storeDocument.setSecondViewerScrollLock(false))
-
           } else if (classTargetViewer === 'second' && !storeDocument.secondViewerScrollLock) {
             const scrollY = targetElement.scrollTop - this.scrollTop.secondViewer
             storeDocument.setFirstViewerScrollLock(true)
@@ -510,7 +338,6 @@ export default {
             this.scrollTop.secondViewer = targetElement.scrollTop
 
             requestAnimationFrame(() => storeDocument.setFirstViewerScrollLock(false))
-
           } else {
             this.setScrollTop(classTargetViewer, targetElement.scrollTop)
           }
@@ -535,38 +362,10 @@ export default {
   },
 
   watch: {
-    activeFirstPageId(newPageId: string) {
-      if (newPageId) {
-        const element = document.querySelector(`#${newPageId}`) as HTMLElement
-        const elementWrapper = element.closest('.wrapper-documents') as HTMLElement
-
-        element?.scrollIntoView({ behavior: 'auto', block: 'start' })
-        elementWrapper?.scrollBy(0, -60) // for first pages of docs (to show the name doc)
-      }
-    },
-
-    'storeEditActions.cutPageIds'(newCutPageIds: string[]) {
-      if (!newCutPageIds.length) {
-        requestAnimationFrame(() => this.handleResize())
-      }
-    },
-
-    'storeEditActions.copyPageIds'(newCopyPageIds: string[]) {
-      if (!newCopyPageIds.length) {
-        requestAnimationFrame(() => this.handleResize())
-      }
-    },
-
-    'storeDocument.activeDocId'(newDocId: number) {
+    'storeDocument.activeDocId'(newDocId: string) {
       if (newDocId) {
-        const activeDocIds = document.querySelectorAll(`#doc_${newDocId}`)
-        this.activeFirstPageId =
-          this.isCompareView && this.isSecondViewer
-            ? activeDocIds[1].querySelector('.page').id
-            : activeDocIds[0].querySelector('.page').id
-
-        this.indexActiveFirstPageId = this.firstPageIds.findIndex(
-          (pageId: string) => pageId === this.activeFirstPageId,
+        this.indexActiveFirstPageId = storeDocument.documents.findIndex(
+          (doc) => doc.id === newDocId,
         )
       }
     },
@@ -576,7 +375,7 @@ export default {
 
 <template>
   <HeaderMain
-    v-if="isLastPageLoaded"
+    v-if="isLastPageLoaded || storeDocument.isDocumentsLoaded && !countDocuments"
     ref="refControls"
     :isEditMode="isEditMode"
     :isFirstViewer="isFirstViewer"
@@ -584,8 +383,10 @@ export default {
     :isWrappedView="isWrappedView"
     :isCompareView="isCompareView"
     :indexActiveFirstPageId="indexActiveFirstPageId"
-    :countDocuments="firstPageIds.length"
-    :countSelectedPage="isEditMode ? storeEditActions.selectedPageIds.length : selectedPageIds.length"
+    :countSelectedPages="
+      isCompareView ? selectedPageIds.length : storeDocument.selectedPageIds.length
+    "
+    :countSelectedDocs="isCompareView ? selectedDocIds.length : storeDocument.selectedDocIds.length"
     :activeRotate="activeRotate"
     :scale="scale"
     @changeIndexActiveFirstPageId="changeIndexActiveFirstPageId"
@@ -595,64 +396,76 @@ export default {
     @showAnnotations="showAnnotations"
   />
 
-  <LoaderSkeleton v-if="!storeDocument.isDocumentsLoaded || (countDocuments && !isLastPageLoaded)" />
+  <!-- <v-progress-circular color="error" indeterminate :size="89" :width="8"></v-progress-circular> -->
+
+  <LoaderSkeleton
+    v-if="!storeDocument.isDocumentsLoaded || (countDocuments && !isLastPageLoaded)"
+  />
 
   <div v-if="storeDocument.isDocumentsLoaded && !countDocuments" class="empty">No documents</div>
 
-  <div class="wrapper-view">
- <!-- @click="clickWrapper" -->
+  <div class="wrapper-view" @click="clickWrapper">
     <div
       :class="this.isCompareView ? (this.isFirstViewer ? 'first' : 'second') : ''"
       class="wrapper-documents"
-      @click="clickWrapper"
       @scroll="handleScroll"
     >
       <div
         v-for="(doc, indexDoc, key) in storeDocument.documents"
         class="wrapper-document"
         :key="doc"
-        :id="`doc_${doc.id}`"
+        :id="`${doc.id}`"
         :class="{
           'wrapped-view-documents': isWrappedView,
           'edit-mode': isEditMode,
-          active: isCompareView ? selectedDocIds.includes(doc.id) : storeDocument.selectedDocIds.includes(doc.id),
-          edit: editedDocIds.includes(doc.id)
+          active: isCompareView
+            ? selectedDocIds.includes(doc.id)
+            : storeDocument.selectedDocIds.includes(doc.id),
+          edit: editedDocIds.includes(doc.id),
         }"
       >
         <div
           v-if="isLastPageLoaded"
           class="document-title"
-          v-click-outside="($event) => clickOutSideDocName($event, doc.id)"
-          @click="!editedPageIds.length && !editedDocIds.includes(doc.id) && clickDocument($event, doc.id)"
+          @click.stop="clickDocument($event, doc.id)"
         >
-          <span class="document-number">{{ storeDocument.documentIds.findIndex(id => id === doc.id) + 1 }}. </span>
+          <span class="document-number"
+            >{{
+              storeDocument.documents.map((doc) => doc.id).findIndex((id) => id === doc.id) + 1
+            }}.
+          </span>
           <span class="document-name">{{ docName(doc.name) }}</span>
         </div>
 
         <div :class="{ 'wrapped-view-pages': isEditMode || isWrappedView }" class="wrapper-pages">
-          <div class="wrapper-page" v-for="page in doc.url.pages" :key="page">
-             <!-- @clickOutSidePage="clickOutSidePage" -->
+          <div
+            v-for="page in doc.pages"
+            :key="page"
+            class="wrapper-page-view"
+            :class="{
+              'active-page': isCompareView
+                ? selectedPageIds.includes(page.pageId)
+                : storeDocument.selectedPageIds.includes(page.pageId),
+              'edit-page': editedPageIds.includes(page.pageId),
+            }"
+          >
             <PageView
               ref="refPage"
               class="page"
-              :class="`num_page_${page}`"
-              :docId="doc.id"
-              :docPdf="doc.url.pdf"
-              :isEditMode="isEditMode"
+              :isCompareView="isCompareView"
               :annotations="annotations"
-              :numberPage="page"
+              :page="page"
               :scale="scale / 100"
-              :selectedPageIds="isEditMode ? storeEditActions.selectedPageIds : selectedPageIds"
-              :editedPageIds="editedPageIds"
-              :isLatestPageDoc="isLatestPageInDoc(page, doc.url.pages)"
-              :isLatestPageAllDocs="isLatestPageInDoc(page, doc.url.pages) && indexDoc + 1 === countDocuments"
+              :isLatestPageDoc="isLatestPageInDoc(page.numPage, doc.pages.length)"
+              :isLatestPageAllDocs="
+                isLatestPageInDoc(page.numPage, doc.pages.length) && indexDoc + 1 === countDocuments
+              "
               :isLastPageAllDocsLoaded="isLastPageLoaded"
-
-              @clickPage="clickPage"
+              @click.stop="clickPage($event, page.pageId)"
               @docsLoaded="docsLoaded"
-              @addPageId="addPageId"
-              @addFirstPageId="addFirstPageId($event, indexDoc)"
             />
+
+            <div class="page-order">{{ page.numPage }}</div>
           </div>
         </div>
       </div>
@@ -715,12 +528,15 @@ export default {
   padding-bottom: 50px;
 }
 
+.wrapper-document {
+  padding: 0 5px;
+}
+
 .edit-mode,
 .wrapped-view-documents {
   display: flex;
   justify-content: center;
   flex-direction: column;
-  padding: 0 90px;
 }
 
 .edit {
@@ -747,6 +563,9 @@ export default {
 .document-title:hover {
   cursor: pointer;
   opacity: 0.7;
+  box-shadow:
+    0px -7px 18px -4px rgba(0, 0, 0, 0.2),
+    0 -8px 20px 0 rgba(0, 0, 0, 0.19);
 }
 
 .document-title:hover ~ .wrapper-pages {
@@ -778,10 +597,16 @@ export default {
 
 .active > .document-title {
   border-top: 3px solid #e53935;
+  box-shadow:
+    0px -7px 18px -4px rgba(0, 0, 0, 0.2),
+    0 -8px 20px 0 rgba(0, 0, 0, 0.19);
 }
 
 .active > .document-title ~ .wrapper-pages {
   border-bottom: 3px solid #e53935;
+  box-shadow:
+    0 10px 16px 0 rgba(0, 0, 0, 0.2),
+    0 6px 20px 0 rgba(0, 0, 0, 0.19);
 }
 
 .wrapped-view-pages {
@@ -791,7 +616,7 @@ export default {
   justify-content: center;
 }
 
-.wrapper-page {
+.wrapper-page-view {
   display: flex;
   align-items: center;
   flex-direction: column;
@@ -799,7 +624,7 @@ export default {
   margin: 0 auto;
 }
 
-.wrapped-view-pages .wrapper-page {
+.wrapped-view-pages .wrapper-page-view {
   margin: 0;
 }
 
@@ -814,16 +639,14 @@ export default {
   cursor: pointer;
 }
 
-.rotate_90 {
-  transform: rotate(90deg);
+.page-order {
+  font-size: 16px;
 }
 
-.rotate_180 {
-  transform: rotate(180deg);
-}
-
-.rotate_270 {
-  transform: rotate(270deg);
+.active-page .page-order {
+  background-color: #e53935;
+  border-radius: 15px;
+  padding: 0 10px;
 }
 
 .navigation {

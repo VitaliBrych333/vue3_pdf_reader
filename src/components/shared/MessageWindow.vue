@@ -1,7 +1,7 @@
 <script lang='ts'>
 export default {
-  props: ['showMessage', 'title', 'text'],
-  emits: ['closeMessage'],
+  props: ['showMessage', 'title', 'text', 'showBtnCancel'],
+  emits: ['clickCancel', 'clickOk'],
 }
 </script>
 
@@ -18,9 +18,15 @@ export default {
     >
       <template v-slot:actions>
         <v-btn
-          class="ms-auto"
+          v-if="showBtnCancel"
+          class="mr-3"
+          text="Cancel"
+          @click="$emit('clickCancel')"
+        ></v-btn>
+
+        <v-btn
           text="Ok"
-          @click="$emit('closeMessage')"
+          @click="$emit('clickOk')"
         ></v-btn>
       </template>
     </v-card>

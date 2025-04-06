@@ -20,7 +20,7 @@ export default {
 </script>
 
 <template>
-  <ErrorBoundary>
+  <!-- <ErrorBoundary> -->
     <div class="wrapper-viewers">
       <div class="viewer">
         <ViewerReader
@@ -46,7 +46,7 @@ export default {
     </div>
 
     <footer></footer>
-  </ErrorBoundary>
+  <!-- </ErrorBoundary> -->
 </template>
 
 <style scoped>

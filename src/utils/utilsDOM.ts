@@ -77,13 +77,14 @@ export function isPortrait(pageElement: HTMLElement): boolean {
     (ratioHeightWidth > 1 &&
       !wrapperClassList?.contains('rotate_90') &&
       !wrapperClassList?.contains('rotate_270')) ||
-    (ratioHeightWidth < 1 && (wrapperClassList?.contains('rotate_90') || wrapperClassList?.contains('rotate_270')))
+    (ratioHeightWidth < 1 &&
+      (wrapperClassList?.contains('rotate_90') || wrapperClassList?.contains('rotate_270')))
   )
 }
 
 export function allPagesInDocPortrait(docId: string) {
   return Array.from(
-    (document.querySelector(`#doc_${docId}`) as HTMLElement).querySelectorAll('.wrapper-page'),
+    (document.querySelector(`#doc-${docId}`) as HTMLElement).querySelectorAll('.wrapper-page'),
   ).every((wrapperPage) => isPortrait(wrapperPage.querySelector('.page') as HTMLElement))
 }
 
@@ -147,7 +148,7 @@ export function createCopyPage(
     }
 
     classList.add('active')
-    storeEditActions.addSelectedPageId(pageId, event.ctrlKey)
+    storeDocument.addSelectedPageId(pageId, event.ctrlKey)
   })
 
   const sourceCanvas = targetPageElement.querySelector('canvas') as HTMLCanvasElement
@@ -169,27 +170,27 @@ export function createCopyPage(
 export function createDoc(
   docClone: HTMLElement,
   orderIndex: number,
-): { docId: string, doc: HTMLElement } {
+): { docId: string; doc: HTMLElement } {
   const doc = docClone.cloneNode(true) as HTMLElement
-  const elementDocTitle = doc.querySelector('.document-title') as HTMLElement;
-  const docId = getId();
+  const elementDocTitle = doc.querySelector('.document-title') as HTMLElement
+  const docId = getId()
 
-  doc.id = `doc_${docId}`;
-
-  (elementDocTitle.querySelector('.document-number') as HTMLElement).innerHTML = `${orderIndex + 1}. `;
+  doc.id = `doc-${docId}`
+  ;(elementDocTitle.querySelector('.document-number') as HTMLElement).innerHTML =
+    `${orderIndex + 1}. `
 
   elementDocTitle.addEventListener('click', (event: MouseEvent) => {
     if (!event.ctrlKey) {
-      deleteClassActiveForNewDoc();
+      deleteClassActiveForNewDoc()
     }
 
-    doc.classList.add('active');
-    storeDocument.addSelectedDocId(docId, event.ctrlKey);
+    doc.classList.add('active')
+    storeDocument.addSelectedDocId(docId, event.ctrlKey)
   })
 
-  doc.querySelectorAll('.wrapper-page').forEach((page) => page.remove());
+  doc.querySelectorAll('.wrapper-page').forEach((page) => page.remove())
 
-  return { docId, doc };
+  return { docId, doc }
 }
 
 export function checkWrapperPagesIsEmpty(wrapperPages: HTMLElement) {
@@ -203,9 +204,11 @@ export function checkWrapperPagesIsEmpty(wrapperPages: HTMLElement) {
 }
 
 export function changeDocNumberNameForCopiedDocs() {
-  document.querySelectorAll('.wrapper-document.copied')
-    .forEach(elementDoc => {
-      const targetIndexDoc = storeDocument.documentIds.findIndex(docId => docId === elementDoc.id.slice(4)) as number
-      (elementDoc.querySelector('.document-number') as HTMLElement).innerHTML = `${targetIndexDoc + 1}. `
+  document.querySelectorAll('.wrapper-document.copied').forEach((elementDoc) => {
+    const targetIndexDoc = storeDocument.documentIds.findIndex(
+      (docId) => docId === elementDoc.id.slice(4),
+    ) as number
+    ;(elementDoc.querySelector('.document-number') as HTMLElement).innerHTML =
+      `${targetIndexDoc + 1}. `
   })
 }

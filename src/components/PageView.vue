@@ -1,31 +1,19 @@
 <script lang='ts'>
 import '@tato30/vue-pdf/style.css';
 import { VuePDF } from '@tato30/vue-pdf';
-import { useId } from 'vue';
-import eventEmitter from '../shared/eventEmitter'
 
 export default {
   props: [
-    'docId',
-    'numberPage',
-    'docPdf',
     'scale',
-    'isEditMode',
+    'isCompareView',
     'annotations',
-    'selectedPageIds',
-    'editedPageIds',
     'isLatestPageDoc',
     'isLatestPageAllDocs',
-    'isLastPageAllDocsLoaded'
+    'isLastPageAllDocsLoaded',
+    'page'
   ],
 
-  emits: [
-    'clickPage',
-    'clickOutSidePage',
-    'docsLoaded',
-    'addPageId',
-    'addFirstPageId'
-  ],
+  emits: ['docsLoaded'],
 
   components: {
     VuePDF
@@ -33,28 +21,15 @@ export default {
 
   data() {
     return {
-      rotation: 0,
-      pageId: useId()
-    }
-  },
-
-  mounted() {
-    this.$emit('addPageId', this.pageId);
-
-    if (this.numberPage === 1) { // first page every doc
-      this.$emit('addFirstPageId', this.pageId);
+      rotate: 0,
     }
   },
 
   methods: {
     onLoaded(value) {
+      // console.log('onloaded-----------------', this.isLatestPageAllDocs, this.isLastPageAllDocsLoaded, value)
       if (this.isLatestPageAllDocs && !this.isLastPageAllDocsLoaded) {
         this.$emit('docsLoaded');
-      }
-
-      // Edit Mode - for Split action in header
-      if (this.isEditMode && this.isLatestPageDoc) {
-        eventEmitter.emit('pageLoaded', this.docId)
       }
 
       // storeDocument.documents
@@ -116,19 +91,14 @@ export default {
       //   })
     },
 
-    async rotatePage(value: number) {
-      this.rotation += value;
+    // for CompareView
+    rotatePage(value: number) {
+      this.rotate += value;
 
-      if (this.rotation > 270 || this.rotation < -270) {
-        this.rotation = 0;
+      if (this.rotate > 270 || this.rotate < -270) {
+        this.rotate = 0;
       }
     },
-
-    // clickPage(event: PointerEvent) {
-    //   // if (!this.editedPageIds.includes(this.pageId)) {
-    //     this.$emit('clickPage', event, this.pageId)
-    //   // }
-    // },
 
     drawArrow(context) {
         // const borderWidth = 6 / this.scale;
@@ -184,19 +154,18 @@ export default {
   },
 }
 </script>
-//   v-click-outside="($event) => $emit('clickOutSidePage', $event, pageId)"
+
 <template>
   <div
-    :id="pageId"
-    :class="{ wrapped: true, active: selectedPageIds.includes(pageId), edit: editedPageIds.includes(pageId) }"
+    :id="page.pageId"
+    class="wrapper-page"
     ref="wrapperPage"
-    @click.stop="($event) => $emit('clickPage', $event, this.pageId)"
   >
     <VuePDF
       ref="vuePDFRef"
-      :pdf="docPdf"
-      :page="numberPage"
-      :rotation="rotation"
+      :pdf="page.url"
+      :page="page.originalNumPage"
+      :rotation="isCompareView ? rotate : page.rotate"
       :scale="scale"
       :annotation-layer="annotations"
       @loaded="onLoaded"
@@ -205,20 +174,16 @@ export default {
 </template>
 
 <style scoped>
-.active, .wrapped:hover {
+.active-page .wrapper-page, .wrapper-page:hover {
   box-shadow: 0 10px 16px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
 }
 
-.active {
+.active-page .wrapper-page {
   border: 3px solid #E53935 !important;
 }
 
-.edit {
+.edit-page .wrapper-page {
   opacity: 0.5;
-}
-
-.copied {
-  opacity: 0.8;
 }
 
 </style>
